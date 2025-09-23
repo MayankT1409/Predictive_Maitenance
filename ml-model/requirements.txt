@@ -4,8 +4,11 @@ pandas
 numpy
 scikit-learn
 xgboost
+lightgbm
 imblearn
 matplotlib
 seaborn
 joblib
 pydantic
+catboost
+optuna
