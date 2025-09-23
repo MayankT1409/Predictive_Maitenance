@@ -1,32 +1,41 @@
-// import axios from "axios";
+import axios from "axios";
 
-// // Pick base URLs from environment variables
-// const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
-// const ML_API_URL  = import.meta.env.VITE_ML_API_URL  || "http://127.0.0.1:8000";
+// Pick base URLs from environment variables (set in .env for Vite)
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+const ML_API_URL  = import.meta.env.VITE_ML_API_URL  || "http://localhost:8000";
 
-// // Create axios instance for backend (sensors, logs, etc.)
-// const API = axios.create({
-//   baseURL: `${BACKEND_URL}/api`,
-//   timeout: 10000,
-// });
+// Create axios instance for backend (sensors, logs, etc.)
+export const API = axios.create({
+	baseURL: `${BACKEND_URL}/api`,
+	timeout: 10000,
+});
 
-// // Optional: second instance for ML API if endpoints differ
-// const ML_API = axios.create({
-//   baseURL: "http://127.0.0.1:8000",   // no /api
-//   timeout: 10000,
-// });
+// Separate instance for ML API (Flask)
+export const ML_API = axios.create({
+	baseURL: ML_API_URL,
+	timeout: 15000,
+});
 
-// // ----------------- API calls -----------------
-// export const fetchSensors     = () => API.get("/sensors").then(r => r.data);
-// export const fetchLogs        = () => API.get("/logs").then(r => r.data);
-// export const postSensor       = (payload) => API.post("/sensors", payload).then(r => r.data);
+// ----------------- API calls -----------------
+export const fetchSensors = () => API.get("/sensors").then(r => r.data);
+export const fetchLogs = () => API.get("/logs").then(r => r.data);
+export const postSensor = (payload) => API.post("/sensors", payload).then(r => r.data);
 
-// // Predictions might come from ML_API instead of backend
-// export const fetchPredictions = (payload = {}) =>
-//   ML_API.post("/predict", payload).then(r => r.data);
+// Predictions
+export const predictRow = async (sensors) => {
+	// sensors can be an object keyed by feature names, or an ordered array
+	const { data } = await ML_API.post("/predict", { sensors });
+	return data;
+};
 
-
-// export default API;
+export const predictFile = async (file) => {
+	const form = new FormData();
+	form.append("file", file);
+	const { data } = await ML_API.post("/predict_file", form, {
+		headers: { "Content-Type": "multipart/form-data" },
+	});
+	return data;
+};
 
 
 // Sample data - move this to a separate data service
