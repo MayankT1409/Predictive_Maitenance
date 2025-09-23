@@ -1,35 +1,14 @@
-import { useEffect, useState } from "react";
-import LoadingSpinner from "../components/LoadingSpinner.jsx";
-import MaintenanceLog from "../components/MaintenanceLog.jsx";
-import { fetchLogs } from "../components/API.js";
+import React from 'react';
+import MaintenanceLog from '../components/MaintenanceLog';
 
-export default function Logs() {
-  const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState([]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await fetchLogs();
-        const formatted = data.map(d => ({
-          date: new Date(d.date).toLocaleString(),
-          issue: d.issue,
-          actionTaken: d.actionTaken,
-          performedBy: d.performedBy,
-        }));
-        setRows(formatted);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
-
-  if (loading) return <LoadingSpinner />;
-
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-semibold">Maintenance Logs</h2>
-      <MaintenanceLog rows={rows} />
+const Logs = () => (
+  <div className="p-6 bg-gray-50 min-h-screen">
+    <div className="mb-6">
+      <h2 className="text-2xl font-bold text-gray-900 mb-2">Maintenance Logs</h2>
+      <p className="text-gray-600">View maintenance history and equipment logs</p>
     </div>
-  );
-}
+    <MaintenanceLog />
+  </div>
+);
+
+export default Logs;
