@@ -1,231 +1,404 @@
-# import pandas as pd
-# from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
-# from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, f1_score
-# from sklearn.preprocessing import StandardScaler
-# from sklearn.ensemble import GradientBoostingClassifier
-# import joblib
-# import seaborn as sns
-# import matplotlib.pyplot as plt
-# import numpy as np
-# import shap
-
-# from .preprocess import preprocess_data
-
-
-# def add_features(df: pd.DataFrame) -> pd.DataFrame:
-#     """Feature engineering for predictive maintenance"""
-
-#     # Rolling statistics
-#     df["temp_roll_mean5"] = df["temperature"].rolling(window=5, min_periods=1).mean()
-#     df["vib_roll_std5"] = df["vibration"].rolling(window=5, min_periods=1).std().fillna(0)
-
-#     df["temp_roll_max10"] = df["temperature"].rolling(window=10, min_periods=1).max()
-#     df["vib_roll_mean10"] = df["vibration"].rolling(window=10, min_periods=1).mean()
-#     df["rpm_roll_std10"] = df["rpm"].rolling(window=10, min_periods=1).std().fillna(0)
-
-#     # Lag features
-#     df["temp_lag1"] = df["temperature"].shift(1).fillna(df["temperature"].iloc[0])
-#     df["rpm_lag1"] = df["rpm"].shift(1).fillna(df["rpm"].iloc[0])
-
-#     # Change rates
-#     df["rpm_change"] = df["rpm"].diff().fillna(0)
-#     df["temp_change"] = df["temperature"].diff().fillna(0)
-#     df["vib_change"] = df["vibration"].diff().fillna(0)
-
-#     # Interaction features
-#     df["vib_rpm"] = df["vibration"] * df["rpm"]
-#     df["press_temp_ratio"] = df["pressure"] / (df["temperature"] + 1e-6)
-
-#     return df
-
-
-# def train_model(csv_path: str, model_path: str = "models/gb_model.pkl"):
-#     # Load dataset
-#     df = pd.read_csv(csv_path)
-#     print("Columns:", df.columns.tolist())
-
-#     # Preprocess
-#     df = preprocess_data(df)
-
-#     # Add engineered features
-#     df = add_features(df)
-
-#     # Drop constant / duplicate columns
-#     df = df.loc[:, df.nunique() > 1]
-
-#     # Features & target
-#     X = df.drop("failure", axis=1)
-#     y = df["failure"]
-
-#     print("\nClass Distribution:")
-#     print(y.value_counts())
-#     print(y.value_counts(normalize=True))
-
-#     # Scale features
-#     scaler = StandardScaler()
-#     X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
-
-#     # Define model (Gradient Boosting)
-#     gb = GradientBoostingClassifier(random_state=42)
-
-#     # Hyperparameter search space
-#     param_dist = {
-#         "n_estimators": [100, 200, 300],
-#         "max_depth": [3, 5, 7],
-#         "learning_rate": [0.01, 0.05, 0.1],
-#         "subsample": [0.6, 0.8, 1.0],
-#         "min_samples_split": [2, 5, 10],
-#         "min_samples_leaf": [1, 3, 5],
-#     }
-
-#     # Time series split for predictive maintenance
-#     tscv = TimeSeriesSplit(n_splits=3)
-
-#     search = RandomizedSearchCV(
-#         gb, param_distributions=param_dist,
-#         n_iter=20, scoring="f1",
-#         cv=tscv, verbose=1, random_state=42, n_jobs=-1
-#     )
-
-#     # Fit model
-#     search.fit(X_scaled, y)
-#     model = search.best_estimator_
-#     print(f"Best Params: {search.best_params_}")
-
-#     # Predictions (using last 20% for evaluation)
-#     split_index = int(len(X_scaled) * 0.8)
-#     X_train, X_test = X_scaled[:split_index], X_scaled[split_index:]
-#     y_train, y_test = y[:split_index], y[split_index:]
-
-#     y_pred = model.predict(X_test)
-#     y_prob = model.predict_proba(X_test)[:, 1]
-
-#     # Evaluation
-#     print("\n📊 Classification Report:")
-#     print(classification_report(y_test, y_pred))
-#     print("ROC-AUC:", roc_auc_score(y_test, y_prob))
-#     print("F1 Score:", f1_score(y_test, y_pred))
-
-#     # Confusion matrix
-#     cm = confusion_matrix(y_test, y_pred)
-#     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-#     plt.title("Confusion Matrix")
-#     plt.xlabel("Predicted")
-#     plt.ylabel("Actual")
-#     plt.show()
-
-#     # Feature importance
-#     feature_importance = model.feature_importances_
-#     sorted_idx = np.argsort(feature_importance)[-15:]
-#     plt.barh(range(len(sorted_idx)), feature_importance[sorted_idx], align="center")
-#     plt.yticks(range(len(sorted_idx)), X.columns[sorted_idx])
-#     plt.title("Feature Importance (Gradient Boosting)")
-#     plt.show()
-
-#     # SHAP values for feature explainability
-#     explainer = shap.Explainer(model, X_test)
-#     shap_values = explainer(X_test)
-#     shap.summary_plot(shap_values, X_test)
-
-#     # Save model
-#     joblib.dump(model, model_path)
-#     print(f"✅ Model saved at {model_path}")
-
-#     return model, X_test, y_test
-
-
-
-
-
+import os
 import pandas as pd
+import numpy as np
 import joblib
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report, roc_auc_score, f1_score, confusion_matrix
-from imblearn.over_sampling import SMOTE
-import xgboost as xgb
+
+# Optional dependencies – guard so Random Forest path still works without them
+try:
+    from imblearn.over_sampling import SMOTE  # noqa: F401
+except Exception:
+    SMOTE = None  # type: ignore
+
+try:
+    import xgboost as xgb  # noqa: F401
+except Exception:
+    xgb = None  # type: ignore
+
+try:
+    import lightgbm as lgb  # noqa: F401
+except Exception:
+    lgb = None  # type: ignore
+
+try:
+    from catboost import CatBoostClassifier  # noqa: F401
+except Exception:
+    CatBoostClassifier = None  # type: ignore
+
+try:
+    import optuna  # noqa: F401
+except Exception:
+    optuna = None  # type: ignore
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from src.preprocess import preprocess_data
 from src.features import add_features
 
-def train_model(csv_path: str, n_splits: int = 5):
-    # ============================
-    # Load & preprocess data
-    # ============================
-    df = pd.read_csv(csv_path)
-    df = preprocess_data(df)
-    df = add_features(df)
+from sklearn.ensemble import RandomForestClassifier
 
-    # Target
-    y = df["failure"]
-    drop_cols = ["failure", "failure_cum"]
-    X = df.drop(columns=drop_cols, errors="ignore")
 
-    # Save feature columns (for reference/debugging)
-    feature_columns = X.columns.tolist()
-    joblib.dump(feature_columns, "models/feature_columns.pkl")
-    print("✅ Feature columns saved")
 
-    # ============================
-    # TimeSeriesSplit evaluation
-    # ============================
+
+# ==============================================================
+# Random Forest Training (n_estimators=5)
+# ==============================================================
+def train_random_forest(
+    csv_path: str,
+    n_splits: int = 5,
+    n_estimators: int = 5,   # ⬅️ Using 5 trees ("epochs")
+    max_depth: int = None,
+    limit_rows: int | None = None,
+    plot: bool = False,
+    holdout_frac: float = 0.0,
+    optimize_threshold: bool = False,
+):
+    print(f"Loading data from: {csv_path}")
+    df_raw = pd.read_csv(csv_path)
+    if limit_rows is not None and limit_rows > 0:
+        df_raw = df_raw.head(limit_rows)
+        print(f"Using top {len(df_raw)} rows for a quick run")
     tscv = TimeSeriesSplit(n_splits=n_splits)
-    all_reports = []
+    model = None
+    # Prepare model output directory early (also used to save plots)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.normpath(os.path.join(base_dir, "..", "models"))
+    os.makedirs(models_dir, exist_ok=True)
 
-    for fold, (train_idx, test_idx) in enumerate(tscv.split(X, y)):
-        print(f"\n===== Fold {fold+1} =====")
-        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+    # Holdout mode: single chronological split
+    if holdout_frac and holdout_frac > 0 and holdout_frac < 0.9:
+        split_idx = int(len(df_raw) * (1.0 - holdout_frac))
+        print(f"\n===== Random Forest Holdout ({(1-holdout_frac):.0%} train / {holdout_frac:.0%} test) =====")
+        df_train_raw = df_raw.iloc[:split_idx].reset_index(drop=True)
+        df_test_raw = df_raw.iloc[split_idx:].reset_index(drop=True)
 
-        # Balance classes with SMOTE (before pipeline fit)
-        smote = SMOTE(random_state=42)
-        X_train_bal, y_train_bal = smote.fit_resample(X_train, y_train)
+        print("Preprocessing and feature engineering (train)...")
+        df_train = add_features(preprocess_data(df_train_raw), include_trend=False)
+        print("Preprocessing and feature engineering (test)...")
+        df_test = add_features(preprocess_data(df_test_raw), include_trend=False)
 
-        # Build pipeline (scaler + XGBoost)
+        y_train = df_train["failure"]
+        y_test = df_test["failure"]
+
+        drop_cols = [c for c in df_train.columns if c.startswith("failure")]
+        X_train = df_train.drop(columns=drop_cols, errors="ignore")
+        X_test = df_test.drop(columns=drop_cols, errors="ignore")
+        # Safety: remove inf/nan
+        X_train = X_train.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+        X_test = X_test.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+
         pipeline = Pipeline([
             ("scaler", StandardScaler()),
-            ("model", xgb.XGBClassifier(
-                n_estimators=300,
-                max_depth=6,
-                learning_rate=0.05,
-                subsample=0.8,
-                colsample_bytree=0.8,
+            ("model", RandomForestClassifier(
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                class_weight="balanced",
                 random_state=42,
-                use_label_encoder=False,
-                eval_metric="logloss",
                 n_jobs=-1
             ))
         ])
 
-        # Train pipeline
-        pipeline.fit(X_train_bal, y_train_bal)
+        print("Fitting model...")
+        pipeline.fit(X_train, y_train)
 
-        # Predictions
-        y_pred = pipeline.predict(X_test)
         y_proba = pipeline.predict_proba(X_test)[:, 1]
+        if optimize_threshold:
+            thresholds = np.linspace(0.2, 0.8, 61)
+            best_acc = -1.0
+            best_th = 0.5
+            for th in thresholds:
+                acc = (y_proba >= th).astype(int).mean() if False else None
+            # compute accuracy properly
+            best_th = 0.5
+            best_acc = -1.0
+            for th in thresholds:
+                acc = ((y_proba >= th).astype(int) == y_test.values).mean()
+                if acc > best_acc:
+                    best_acc = acc
+                    best_th = th
+            print(f"Best threshold by accuracy: {best_th:.3f} (acc={best_acc:.3f})")
+            y_pred = (y_proba >= best_th).astype(int)
+        else:
+            y_pred = (y_proba >= 0.5).astype(int)
 
-        # Metrics
         print(classification_report(y_test, y_pred))
         print("ROC-AUC:", roc_auc_score(y_test, y_proba))
         print("F1 Score:", f1_score(y_test, y_pred))
-        all_reports.append((y_test, y_pred))
 
-        # Confusion Matrix
         cm = confusion_matrix(y_test, y_pred)
-        plt.figure(figsize=(5,4))
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-        plt.title(f"Confusion Matrix - Fold {fold+1}")
-        plt.xlabel("Predicted")
-        plt.ylabel("Actual")
-        plt.show()
+        if plot:
+            plt.figure(figsize=(5,4))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+            plt.title("Random Forest Confusion Matrix - Holdout")
+            plt.xlabel("Predicted")
+            plt.ylabel("Actual")
+            plot_path = os.path.join(models_dir, f"rf_confusion_matrix_holdout.png")
+            try:
+                plt.savefig(plot_path, bbox_inches="tight")
+                print(f"Saved confusion matrix to: {plot_path}")
+            except Exception:
+                pass
+            finally:
+                plt.close()
 
-    # ============================
-    # Save final pipeline
-    # ============================
-    joblib.dump(pipeline, "models/predictive_pipeline.pkl")
-    print("✅ Full pipeline saved at models/predictive_pipeline.pkl")
+        model = pipeline
 
-    return pipeline
+    else:
+        for fold, (train_idx, test_idx) in enumerate(tscv.split(df_raw)):
+            print(f"\n===== Random Forest Fold {fold+1} =====")
+            df_train_raw = df_raw.iloc[train_idx].reset_index(drop=True)
+            df_test_raw = df_raw.iloc[test_idx].reset_index(drop=True)
+
+            print("Preprocessing and feature engineering (train)...")
+            df_train = add_features(preprocess_data(df_train_raw), include_trend=False)
+            print("Preprocessing and feature engineering (test)...")
+            df_test = add_features(preprocess_data(df_test_raw), include_trend=False)
+
+            y_train = df_train["failure"]
+            y_test = df_test["failure"]
+
+            drop_cols = [c for c in df_train.columns if c.startswith("failure")]
+            X_train = df_train.drop(columns=drop_cols, errors="ignore")
+            X_test = df_test.drop(columns=drop_cols, errors="ignore")
+            # Safety: remove inf/nan
+            X_train = X_train.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+            X_test = X_test.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+
+            pipeline = Pipeline([
+                ("scaler", StandardScaler()),
+                ("model", RandomForestClassifier(
+                    n_estimators=n_estimators,
+                    max_depth=max_depth,
+                    class_weight="balanced",
+                    random_state=42,
+                    n_jobs=-1
+                ))
+            ])
+
+            print("Fitting model...")
+            pipeline.fit(X_train, y_train)
+
+            y_proba = pipeline.predict_proba(X_test)[:, 1]
+            y_pred = (y_proba >= 0.5).astype(int)
+
+            print(classification_report(y_test, y_pred))
+            print("ROC-AUC:", roc_auc_score(y_test, y_proba))
+            print("F1 Score:", f1_score(y_test, y_pred))
+
+            cm = confusion_matrix(y_test, y_pred)
+            if plot:
+                plt.figure(figsize=(5,4))
+                sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+                plt.title(f"Random Forest Confusion Matrix - Fold {fold+1}")
+                plt.xlabel("Predicted")
+                plt.ylabel("Actual")
+                plot_path = os.path.join(models_dir, f"rf_confusion_matrix_fold_{fold+1}.png")
+                try:
+                    plt.savefig(plot_path, bbox_inches="tight")
+                    print(f"Saved confusion matrix to: {plot_path}")
+                except Exception:
+                    pass
+                finally:
+                    plt.close()
+
+            model = pipeline
+
+    feature_columns = X_train.columns.tolist()
+    joblib.dump(feature_columns, os.path.join(models_dir, "feature_columns.pkl"))
+    joblib.dump(model, os.path.join(models_dir, "rf_model.pkl"))
+    print(f"✅ Random Forest model saved at {os.path.join(models_dir, 'rf_model.pkl')}")
+    return model
+
+
+# ==============================================================
+# LightGBM Training
+# ==============================================================
+def train_lightgbm(
+    csv_path: str,
+    n_splits: int = 5,
+    n_estimators: int = 2000,
+    learning_rate: float = 0.05,
+    num_leaves: int = 127,
+    min_child_samples: int = 40,
+    scale_pos_weight: float | None = None,
+    limit_rows: int | None = None,
+    plot: bool = False,
+    holdout_frac: float = 0.0,
+    optimize_threshold: bool = False,
+):
+    if lgb is None:
+        raise ImportError("lightgbm is not installed. Install with: pip install lightgbm")
+
+    print(f"Loading data from: {csv_path}")
+    df_raw = pd.read_csv(csv_path)
+    if limit_rows is not None and limit_rows > 0:
+        df_raw = df_raw.head(limit_rows)
+        print(f"Using top {len(df_raw)} rows for a quick run")
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    model = None
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.normpath(os.path.join(base_dir, "..", "models"))
+    os.makedirs(models_dir, exist_ok=True)
+
+    if holdout_frac and holdout_frac > 0 and holdout_frac < 0.9:
+        split_idx = int(len(df_raw) * (1.0 - holdout_frac))
+        print(f"\n===== LightGBM Holdout ({(1-holdout_frac):.0%} train / {holdout_frac:.0%} test) =====")
+        df_train_raw = df_raw.iloc[:split_idx].reset_index(drop=True)
+        df_test_raw = df_raw.iloc[split_idx:].reset_index(drop=True)
+
+        print("Preprocessing and feature engineering (train)...")
+        df_train = add_features(preprocess_data(df_train_raw), include_trend=False)
+        print("Preprocessing and feature engineering (test)...")
+        df_test = add_features(preprocess_data(df_test_raw), include_trend=False)
+
+        y_train = df_train["failure"]
+        y_test = df_test["failure"]
+
+        drop_cols = [c for c in df_train.columns if c.startswith("failure")]
+        X_train = df_train.drop(columns=drop_cols, errors="ignore")
+        X_test = df_test.drop(columns=drop_cols, errors="ignore")
+
+        # Safety: remove inf/nan
+        X_train = X_train.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+        X_test = X_test.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+
+        # Compute scale_pos_weight if not provided
+        if scale_pos_weight is None:
+            pos = max(1, int(y_train.sum()))
+            neg = max(1, int((y_train == 0).sum()))
+            spw = neg / pos
+        else:
+            spw = scale_pos_weight
+
+        model = lgb.LGBMClassifier(
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            num_leaves=num_leaves,
+            min_child_samples=min_child_samples,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            objective="binary",
+            random_state=42,
+            n_jobs=-1,
+            scale_pos_weight=spw,
+        )
+
+        print("Fitting LightGBM...")
+        model.fit(X_train, y_train)
+
+        y_proba = model.predict_proba(X_test)[:, 1]
+        if optimize_threshold:
+            thresholds = np.linspace(0.2, 0.8, 61)
+            best_acc = -1.0
+            best_th = 0.5
+            for th in thresholds:
+                acc = ((y_proba >= th).astype(int) == y_test.values).mean()
+                if acc > best_acc:
+                    best_acc = acc
+                    best_th = th
+            print(f"Best threshold by accuracy: {best_th:.3f} (acc={best_acc:.3f})")
+            y_pred = (y_proba >= best_th).astype(int)
+        else:
+            y_pred = (y_proba >= 0.5).astype(int)
+
+        print(classification_report(y_test, y_pred))
+        print("ROC-AUC:", roc_auc_score(y_test, y_proba))
+        print("F1 Score:", f1_score(y_test, y_pred))
+
+        cm = confusion_matrix(y_test, y_pred)
+        if plot:
+            plt.figure(figsize=(5,4))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Greens")
+            plt.title("LightGBM Confusion Matrix - Holdout")
+            plt.xlabel("Predicted")
+            plt.ylabel("Actual")
+            plot_path = os.path.join(models_dir, f"lgb_confusion_matrix_holdout.png")
+            try:
+                plt.savefig(plot_path, bbox_inches="tight")
+                print(f"Saved confusion matrix to: {plot_path}")
+            except Exception:
+                pass
+            finally:
+                plt.close()
+
+    else:
+        for fold, (train_idx, test_idx) in enumerate(tscv.split(df_raw)):
+            print(f"\n===== LightGBM Fold {fold+1} =====")
+            df_train_raw = df_raw.iloc[train_idx].reset_index(drop=True)
+            df_test_raw = df_raw.iloc[test_idx].reset_index(drop=True)
+
+            print("Preprocessing and feature engineering (train)...")
+            df_train = add_features(preprocess_data(df_train_raw), include_trend=False)
+            print("Preprocessing and feature engineering (test)...")
+            df_test = add_features(preprocess_data(df_test_raw), include_trend=False)
+
+            y_train = df_train["failure"]
+            y_test = df_test["failure"]
+
+            drop_cols = [c for c in df_train.columns if c.startswith("failure")]
+            X_train = df_train.drop(columns=drop_cols, errors="ignore")
+            X_test = df_test.drop(columns=drop_cols, errors="ignore")
+
+            # Safety: remove inf/nan
+            X_train = X_train.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+            X_test = X_test.replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+
+            # Compute scale_pos_weight if not provided
+            if scale_pos_weight is None:
+                pos = max(1, int(y_train.sum()))
+                neg = max(1, int((y_train == 0).sum()))
+                spw = neg / pos
+            else:
+                spw = scale_pos_weight
+
+            model = lgb.LGBMClassifier(
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                num_leaves=num_leaves,
+                min_child_samples=min_child_samples,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                objective="binary",
+                random_state=42,
+                n_jobs=-1,
+                scale_pos_weight=spw,
+            )
+
+            print("Fitting LightGBM...")
+            model.fit(X_train, y_train)
+
+            y_proba = model.predict_proba(X_test)[:, 1]
+            y_pred = (y_proba >= 0.5).astype(int)
+
+            print(classification_report(y_test, y_pred))
+            print("ROC-AUC:", roc_auc_score(y_test, y_proba))
+            print("F1 Score:", f1_score(y_test, y_pred))
+
+            cm = confusion_matrix(y_test, y_pred)
+            if plot:
+                plt.figure(figsize=(5,4))
+                sns.heatmap(cm, annot=True, fmt="d", cmap="Greens")
+                plt.title(f"LightGBM Confusion Matrix - Fold {fold+1}")
+                plt.xlabel("Predicted")
+                plt.ylabel("Actual")
+                plot_path = os.path.join(models_dir, f"lgb_confusion_matrix_fold_{fold+1}.png")
+                try:
+                    plt.savefig(plot_path, bbox_inches="tight")
+                    print(f"Saved confusion matrix to: {plot_path}")
+                except Exception:
+                    pass
+                finally:
+                    plt.close()
+
+    # Persist last model and feature columns
+    feature_columns = X_train.columns.tolist()
+    joblib.dump(feature_columns, os.path.join(models_dir, "feature_columns.pkl"))
+    joblib.dump(model, os.path.join(models_dir, "lgb_model.pkl"))
+    print(f"✅ LightGBM model saved at {os.path.join(models_dir, 'lgb_model.pkl')}")
+    return model

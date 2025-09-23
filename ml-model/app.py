@@ -109,6 +109,7 @@ models = {
     "rf": joblib.load(os.path.join(MODELS_DIR, "rf_model.pkl")),
     "gb": joblib.load(os.path.join(MODELS_DIR, "gb_model.pkl")),
     "xgb": joblib.load(os.path.join(MODELS_DIR, "xgb_model.pkl")),
+    "lgb": joblib.load(os.path.join(MODELS_DIR, "lgb_model.pkl")),
 }
 
 @app.post("/predict/{model_name}")
