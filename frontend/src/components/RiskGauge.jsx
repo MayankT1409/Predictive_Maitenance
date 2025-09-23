@@ -1,22 +1,26 @@
-import { RadialBarChart, RadialBar, ResponsiveContainer, PolarAngleAxis } from "recharts";
+import React from 'react';
 
-export default function RiskGauge({ probability = 0 }) {
-  const pct = Math.round(probability * 100);
-  const data = [{ name: "risk", value: pct, fill: pct > 60 ? "#ef4444" : pct > 30 ? "#f59e0b" : "#10b981" }];
+const RiskGauge = ({ value, label }) => {
+  const getColor = (val) => {
+    if (val >= 80) return 'text-green-500';
+    if (val >= 50) return 'text-yellow-500';
+    return 'text-red-500';
+  };
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm p-5 flex flex-col items-center">
-      <h3 className="font-semibold mb-2">Failure Risk</h3>
-      <div className="w-full h-56">
-        <ResponsiveContainer width="100%" height="100%">
-          <RadialBarChart innerRadius="70%" outerRadius="100%" data={data} startAngle={180} endAngle={0}>
-            <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
-            <RadialBar minAngle={15} dataKey="value" cornerRadius={20} clockWise />
-          </RadialBarChart>
-        </ResponsiveContainer>
+    <div className="bg-white p-4 rounded-lg border border-gray-200">
+      <div className="text-center">
+        <div className={`text-3xl font-bold ${getColor(value)}`}>{value}%</div>
+        <div className="text-gray-600 text-sm">{label}</div>
+        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+          <div 
+            className={`h-2 rounded-full ${value >= 80 ? 'bg-green-500' : value >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+            style={{ width: `${value}%` }}
+          />
+        </div>
       </div>
-      <div className="mt-2 text-3xl font-semibold">{pct}%</div>
-      <div className="text-xs text-gray-500">Probability of maintenance required</div>
     </div>
   );
-}
+};
+
+export default RiskGauge;
