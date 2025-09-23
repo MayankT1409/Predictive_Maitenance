@@ -56,6 +56,7 @@ def train_random_forest(
     plot: bool = False,
     holdout_frac: float = 0.0,
     optimize_threshold: bool = False,
+    optimize_for: str = "f1",
 ):
     print(f"Loading data from: {csv_path}")
     df_raw = pd.read_csv(csv_path)
@@ -107,20 +108,19 @@ def train_random_forest(
 
         y_proba = pipeline.predict_proba(X_test)[:, 1]
         if optimize_threshold:
-            thresholds = np.linspace(0.2, 0.8, 61)
-            best_acc = -1.0
+            thresholds = np.linspace(0.05, 0.95, 181)
+            best_score = -1.0
             best_th = 0.5
             for th in thresholds:
-                acc = (y_proba >= th).astype(int).mean() if False else None
-            # compute accuracy properly
-            best_th = 0.5
-            best_acc = -1.0
-            for th in thresholds:
-                acc = ((y_proba >= th).astype(int) == y_test.values).mean()
-                if acc > best_acc:
-                    best_acc = acc
+                pred = (y_proba >= th).astype(int)
+                if optimize_for == "accuracy":
+                    score = (pred == y_test.values).mean()
+                else:
+                    score = f1_score(y_test, pred)
+                if score > best_score:
+                    best_score = score
                     best_th = th
-            print(f"Best threshold by accuracy: {best_th:.3f} (acc={best_acc:.3f})")
+            print(f"Best threshold by {optimize_for}: {best_th:.3f} ({optimize_for}={best_score:.3f})")
             y_pred = (y_proba >= best_th).astype(int)
         else:
             y_pred = (y_proba >= 0.5).astype(int)
@@ -229,6 +229,7 @@ def train_lightgbm(
     plot: bool = False,
     holdout_frac: float = 0.0,
     optimize_threshold: bool = False,
+    optimize_for: str = "f1",
 ):
     if lgb is None:
         raise ImportError("lightgbm is not installed. Install with: pip install lightgbm")
@@ -294,15 +295,19 @@ def train_lightgbm(
 
         y_proba = model.predict_proba(X_test)[:, 1]
         if optimize_threshold:
-            thresholds = np.linspace(0.2, 0.8, 61)
-            best_acc = -1.0
+            thresholds = np.linspace(0.05, 0.95, 181)
+            best_score = -1.0
             best_th = 0.5
             for th in thresholds:
-                acc = ((y_proba >= th).astype(int) == y_test.values).mean()
-                if acc > best_acc:
-                    best_acc = acc
+                pred = (y_proba >= th).astype(int)
+                if optimize_for == "accuracy":
+                    score = (pred == y_test.values).mean()
+                else:
+                    score = f1_score(y_test, pred)
+                if score > best_score:
+                    best_score = score
                     best_th = th
-            print(f"Best threshold by accuracy: {best_th:.3f} (acc={best_acc:.3f})")
+            print(f"Best threshold by {optimize_for}: {best_th:.3f} ({optimize_for}={best_score:.3f})")
             y_pred = (y_proba >= best_th).astype(int)
         else:
             y_pred = (y_proba >= 0.5).astype(int)

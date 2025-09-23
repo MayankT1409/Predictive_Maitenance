@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--plot", action="store_true", help="Save confusion matrix plots")
     parser.add_argument("--holdout_frac", type=float, default=0.2, help="Fraction of latest data used for test (0 disables holdout)")
     parser.add_argument("--optimize_threshold", action="store_true", help="Optimize decision threshold for accuracy on holdout")
+    parser.add_argument("--optimize_for", type=str, default="f1", choices=["accuracy", "f1"], help="Metric to optimize threshold for")
     args = parser.parse_args()
 
     print(f"🚀 Starting training with model: {args.model.upper()}")
@@ -43,6 +44,7 @@ def main():
             plot=bool(args.plot),
             holdout_frac=(args.holdout_frac if args.holdout_frac and args.holdout_frac > 0 else 0.0),
             optimize_threshold=bool(args.optimize_threshold),
+            optimize_for=args.optimize_for,
         )
 
     elif args.model == "lgbm":
@@ -59,6 +61,7 @@ def main():
             plot=bool(args.plot),
             holdout_frac=(args.holdout_frac if args.holdout_frac and args.holdout_frac > 0 else 0.0),
             optimize_threshold=bool(args.optimize_threshold),
+            optimize_for=args.optimize_for,
         )
 
     # Other models can be re-added here when ready
