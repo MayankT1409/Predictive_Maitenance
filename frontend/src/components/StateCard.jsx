@@ -1,9 +1,15 @@
-export default function StatCard({ title, value, subtitle }) {
-  return (
-    <div className="bg-white rounded-2xl shadow-sm p-5">
-      <p className="text-sm text-gray-500">{title}</p>
-      <p className="text-3xl font-semibold mt-1">{value}</p>
-      {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
+import React from 'react';
+
+const StatusCard = ({ title, value, icon: Icon, color = "blue" }) => (
+  <div className="bg-white rounded-lg p-6 border border-gray-200">
+    <div className="flex items-center justify-between">
+      <div>
+        <p className="text-gray-600 text-sm">{title}</p>
+        <p className="text-2xl font-semibold text-gray-900">{value}</p>
+      </div>
+      <Icon className={`h-8 w-8 text-${color}-500`} />
     </div>
-  );
-}
+  </div>
+);
+
+export default StatusCard;

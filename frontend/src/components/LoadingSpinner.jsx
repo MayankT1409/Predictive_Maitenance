@@ -1,7 +1,9 @@
-export default function LoadingSpinner() {
-  return (
-    <div className="flex items-center justify-center py-10">
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
-    </div>
-  );
-}
+// import React from 'react';
+
+// const LoadingSpinner = () => (
+//   <div className="flex items-center justify-center p-8">
+//     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+//   </div>
+// );
+
+// export default LoadingSpinner;
