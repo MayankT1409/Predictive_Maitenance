@@ -2,7 +2,7 @@ import axios from "axios";
 
 // Pick base URLs from environment variables (set in .env for Vite)
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
-const ML_API_URL  = import.meta.env.VITE_ML_API_URL  || "http://localhost:8000";
+const ML_API_URL  = import.meta.env.VITE_ML_API_URL  || "http://localhost:5000";
 
 // Create axios instance for backend (sensors, logs, etc.)
 export const API = axios.create({
