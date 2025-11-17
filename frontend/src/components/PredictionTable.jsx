@@ -1,23 +1,32 @@
 import React, { useState } from 'react';
 import { TrendingUp, CheckCircle } from 'lucide-react';
 import RiskGauge from './RiskGauge';
-import { predictRow, predictFile } from './API';
+import { predictRow, predictFile } from '../services/API';
 
 const PredictionTable = () => {
-  const [logInput, setLogInput] = useState('');
+  // NOTE: free-form mock state removed to ensure every result originates from the backend model
   const [file, setFile] = useState(null);
   const [formValues, setFormValues] = useState({
     temperature: '',
     pressure: '',
     vibration: '',
-    rpm: '',
-    // torque: '',
-    // humidity: ''
+    rpm: ''
   });
   const [loading, setLoading] = useState(false);
   const [prediction, setPrediction] = useState(null);
   const [error, setError] = useState('');
   const [debug, setDebug] = useState({ request: null, response: null });
+
+  const formatError = (err) => {
+    if (err?.response?.data?.error) return err.response.data.error;
+    if (err?.code === 'ECONNABORTED') {
+      return 'Prediction request timed out. Please try again after restarting the backend and ML services.';
+    }
+    if (err?.message === 'Network Error') {
+      return 'Cannot reach the backend API. Ensure the Node backend is running on http://localhost:5000 (or update BACKEND_URL).';
+    }
+    return err?.message || 'Unexpected error while predicting.';
+  };
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0] || null);
@@ -79,7 +88,7 @@ const PredictionTable = () => {
       setPrediction(toUiFromModel(data));
       setDebug({ request: { sensors }, response: data });
     } catch (err) {
-      setError(err?.response?.data?.error || err.message);
+      setError(formatError(err));
     } finally {
       setLoading(false);
     }
@@ -134,21 +143,9 @@ const PredictionTable = () => {
       
       setDebug({ request: { file: file.name }, response: data });
     } catch (err) {
-      setError(err?.response?.data?.error || err.message);
+      setError(formatError(err));
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handlePredictFromText = () => {
-    if (logInput.trim()) {
-      setPrediction({
-        maintenanceNeeded: false,
-        healthScore: undefined,
-        remainingDays: null,
-        riskLevel: 'Low',
-        recommendations: ['Paste structured parameters or upload a CSV for real results']
-      });
     }
   };
 
@@ -182,7 +179,7 @@ const PredictionTable = () => {
                   type="number"
                   value={formValues[key]}
                   onChange={handleFormChange}
-                  placeholder={key}
+                  placeholder={key.replace('_', ' ')}
                   className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               ))}
@@ -196,23 +193,7 @@ const PredictionTable = () => {
             </button>
           </div>
 
-          {/* Optional: Free-form text (legacy) */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Free-form log (optional)</label>
-            <textarea
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              rows="6"
-              placeholder="Paste raw log text here..."
-              value={logInput}
-              onChange={(e) => setLogInput(e.target.value)}
-            />
-            <button
-              onClick={handlePredictFromText}
-              className="mt-2 w-full bg-gray-600 text-white py-2 px-4 rounded-lg hover:bg-gray-700"
-            >
-              Quick Mock Prediction
-            </button>
-          </div>
+          {/* Free-form mock prediction removed intentionally: we only show real model outputs */}
 
           {error && (
             <div className="text-red-600 text-sm">{error}</div>

@@ -1,4 +1,4 @@
-/ frontend/src/services/API.js
+// frontend/src/services/API.js
 import axios from "axios";
 import { config } from "../../env.config.js"; // adjust path if needed
 
@@ -15,7 +15,7 @@ const BACKEND_URL =
 
 export const API = axios.create({
   baseURL: `${BACKEND_URL}/api`,
-  timeout: 15000,
+  timeout: 30000,
 });
 
 // ---------------------------------------------------------
