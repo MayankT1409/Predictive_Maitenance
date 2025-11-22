@@ -1,21 +1,3 @@
-# src/train_lstm.py
-"""
-LSTM trainer for predictive maintenance.
-
-Usage (train):
-    python -m src.train_lstm --csv ./data/equipment_data.csv --seq_len 32 --epochs 20 --batch_size 128
-
-Usage (predict sliding windows):
-    python -m src.train_lstm --csv ./data/equipment_data.csv --predict --seq_len 32
-
-Usage (predict one-per-machine):
-    python -m src.train_lstm --csv ./data/equipment_data.csv --predict_one_per_machine --seq_len 32 --id_col machine_id
-
-Notes:
-- Requires: torch, sklearn, pandas, joblib, src.preprocess.preprocess_data, src.features.add_features
-- This script intentionally filters out columns that contain 'fail', 'maint', 'maintenance', 'label', 'target', 'cum'
-  to avoid target leakage.
-"""
 from __future__ import annotations
 import os
 import json
