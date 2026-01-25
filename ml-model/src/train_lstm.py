@@ -3,13 +3,16 @@ import os
 import json
 import argparse
 import joblib
-import math
-from typing import Tuple
-
 import numpy as np
 import pandas as pd
+
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, roc_auc_score, f1_score
+from sklearn.metrics import (
+    f1_score,
+    accuracy_score,
+    classification_report,
+)
+from sklearn.feature_selection import mutual_info_classif
 
 import torch
 from torch import nn
@@ -18,388 +21,246 @@ from torch.utils.data import Dataset, DataLoader
 from src.preprocess import preprocess_data
 from src.features import add_features
 
-# ---------------- Dataset & Model ----------------
+
+# ================= Dataset =================
 class SequenceDataset(Dataset):
     def __init__(self, X: pd.DataFrame, y: pd.Series, seq_len: int):
         self.X = X.values.astype("float32")
         self.y = y.values.astype("float32")
-        self.seq_len = int(seq_len)
-        self.n = max(0, len(self.X) - self.seq_len + 1)
+        self.seq_len = seq_len
+        self.n = len(self.X) - seq_len + 1
 
     def __len__(self):
-        return self.n
+        return max(0, self.n)
 
     def __getitem__(self, idx):
-        s = int(idx)
-        e = s + self.seq_len
-        x = self.X[s:e]
-        y = self.y[e - 1]  # label for last t in window
-        return torch.from_numpy(x), torch.tensor([y], dtype=torch.float32)
+        x = self.X[idx : idx + self.seq_len]
+        y = self.y[idx + self.seq_len - 1]
+        return torch.from_numpy(x), torch.tensor(y, dtype=torch.float32)
 
 
+# ================= Model =================
 class LSTMClassifier(nn.Module):
-    def __init__(self, input_size: int, hidden_size: int = 64, num_layers: int = 1, dropout: float = 0.0):
+    def __init__(self, input_size, hidden_size=64, dropout=0.3):
         super().__init__()
-        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size,
-                            num_layers=num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
-        mid = max(1, hidden_size // 2)
+        self.lstm = nn.LSTM(
+            input_size,
+            hidden_size,
+            batch_first=True,
+        )
         self.head = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, mid),
+            nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
-            nn.Linear(mid, 1)
+            nn.Linear(hidden_size // 2, 1),
         )
 
     def forward(self, x):
         out, _ = self.lstm(x)
-        last = out[:, -1, :]
-        logits = self.head(last)
-        return logits.squeeze(-1)
+        out = out[:, -1, :]
+        return self.head(out).squeeze(1)
 
 
-# ---------------- Helpers ----------------
-def ensure_models_dir(models_dir: str):
-    os.makedirs(models_dir, exist_ok=True)
+# ================= Helpers =================
+def ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
 
 
-def detect_target_and_attach(raw_train: pd.DataFrame, raw_test: pd.DataFrame,
-                             proc_train: pd.DataFrame, proc_test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
-    """
-    Prefer 'failure' if created by preprocess_data(); otherwise reattach raw 'Maintenance Required'.
-    Returns (proc_train, proc_test, TARGET_COL)
-    """
-    if "failure" in proc_train.columns:
-        return proc_train, proc_test, "failure"
-
-    raw_name = "Maintenance Required"
-    if raw_name in raw_train.columns:
-        # attach as safe column
-        SAFE = "_raw_failure_"
-        proc_train = proc_train.copy()
-        proc_train[SAFE] = raw_train[raw_name].reset_index(drop=True).astype("float32")
-        if raw_name in raw_test.columns:
-            proc_test = proc_test.copy()
-            proc_test[SAFE] = raw_test[raw_name].reset_index(drop=True).astype("float32")
-        return proc_train, proc_test, SAFE
-
-    # fallback: try to auto-detect
-    candidates = [c for c in proc_train.columns if "fail" in c.lower() or "maint" in c.lower()]
-    if candidates:
-        return proc_train, proc_test, candidates[0]
-
-    raise KeyError("No target found. Expected processed 'failure' or raw 'Maintenance Required'.")
-
-
-def filter_features(df: pd.DataFrame, extra_allow: list | None = None) -> list:
-    """
-    Return list of safe feature names (drop target-like and id/time).
-    extra_allow: list of column names to force-include (e.g. sensor names)
-    """
-    leak_subs = ["fail", "failure", "maint", "maintenance", "label", "target", "cum"]
-    drop_cols = set()
+def detect_target(df: pd.DataFrame) -> str:
+    if "failure" in df.columns:
+        return "failure"
+    if "Maintenance Required" in df.columns:
+        return "Maintenance Required"
     for c in df.columns:
-        low = c.lower()
-        for s in leak_subs:
-            if s in low:
-                drop_cols.add(c)
-                break
-    # also drop timestamp/id-like
-    for c in ["timestamp", "time", "machine_id", "id"]:
-        if c in df.columns:
-            drop_cols.add(c)
-    allow = set(extra_allow or [])
-    features = [c for c in df.columns if c not in drop_cols or c in allow]
-    # final safety: keep only numeric columns
-    features = [c for c in features if pd.api.types.is_numeric_dtype(df[c])]
-    return features
+        if "fail" in c.lower() or "maint" in c.lower():
+            return c
+    raise ValueError("Target column not found")
 
 
-def save_artifacts(models_dir: str, model: nn.Module, scaler: StandardScaler, feature_columns: list, meta: dict):
-    torch.save(model.state_dict(), os.path.join(models_dir, "lstm_model.pt"))
-    joblib.dump(scaler, os.path.join(models_dir, "scaler.pkl"))
-    joblib.dump(list(feature_columns), os.path.join(models_dir, "feature_columns.pkl"))
-    with open(os.path.join(models_dir, "lstm_meta.json"), "w") as f:
-        json.dump(meta, f)
-    print("Saved artifacts to:", models_dir)
+def filter_numeric_features(df: pd.DataFrame, target: str) -> list:
+    drop = ["fail", "maint", "label", "target", "id", "time"]
+    feats = []
+    for c in df.columns:
+        if c == target:
+            continue
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        if any(s in c.lower() for s in drop):
+            continue
+        feats.append(c)
+    return feats
 
 
-def load_for_predict(models_dir: str, device: torch.device):
-    meta_path = os.path.join(models_dir, "lstm_meta.json")
-    if not os.path.exists(meta_path):
-        raise FileNotFoundError("Missing lstm_meta.json in models dir. Train first.")
-    meta = json.load(open(meta_path, "r"))
-    feature_cols = joblib.load(os.path.join(models_dir, "feature_columns.pkl"))
-    scaler = joblib.load(os.path.join(models_dir, "scaler.pkl"))
-    input_size = meta["input_size"]
-    model = LSTMClassifier(input_size=input_size,
-                           hidden_size=meta.get("hidden_size", 64),
-                           num_layers=meta.get("num_layers", 1),
-                           dropout=meta.get("dropout", 0.0))
-    state = torch.load(os.path.join(models_dir, "lstm_model.pt"), map_location=device)
-    model.load_state_dict(state)
-    model.to(device)
-    model.eval()
-    return model, scaler, feature_cols, meta.get("seq_len", 32)
+def select_top_k_features(X: pd.DataFrame, y: pd.Series, k: int):
+    print(f"Selecting top-{k} features using mutual information...")
+    mi = mutual_info_classif(X, y, discrete_features=False)
+    mi_scores = pd.Series(mi, index=X.columns)
+    top_features = mi_scores.sort_values(ascending=False).head(k).index.tolist()
+    return top_features
 
 
-# ---------------- Training ----------------
-def train_lstm(csv_path: str,
-               seq_len: int = 32,
-               epochs: int = 20,
-               batch_size: int = 128,
-               hidden_size: int = 64,
-               num_layers: int = 1,
-               dropout: float = 0.2,
-               lr: float = 1e-3,
-               holdout_frac: float = 0.2,
-               limit_rows: int | None = None,
-               keep_features: list | None = None,
-               models_dir: str | None = None):
+# ================= Training =================
+def train_lstm(
+    csv_path: str,
+    seq_len: int = 32,
+    epochs: int = 30,
+    batch_size: int = 128,
+    hidden_size: int = 64,
+    lr: float = 1e-3,
+    dropout: float = 0.3,
+    holdout_frac: float = 0.2,
+    top_k_features: int = 100,
+):
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
     df = pd.read_csv(csv_path)
-    if limit_rows and limit_rows > 0:
-        df = df.head(limit_rows).reset_index(drop=True)
-        print("Using top rows:", len(df))
 
-    # chronological holdout
-    split_idx = int(len(df) * (1.0 - holdout_frac))
-    df_train_raw = df.iloc[:split_idx].reset_index(drop=True)
-    df_test_raw = df.iloc[split_idx:].reset_index(drop=True)
-    print(f"Train rows: {len(df_train_raw)}, Test rows: {len(df_test_raw)}")
+    # -------- CHRONOLOGICAL TRAIN SPLIT --------
+    split = int(len(df) * (1 - holdout_frac))
+    df_train = df.iloc[:split].reset_index(drop=True)
+    print("Training rows:", len(df_train))
 
-    # preprocess + features
-    print("Preprocessing + feature engineering (train)...")
-    df_train_proc = add_features(preprocess_data(df_train_raw.copy()), include_trend=False)
-    print("Preprocessing + feature engineering (test)...")
-    df_test_proc = add_features(preprocess_data(df_test_raw.copy()), include_trend=False)
+    # -------- PREPROCESS --------
+    df_train = add_features(preprocess_data(df_train), include_trend=False)
 
-    # target detection / attach
-    df_train_proc, df_test_proc, TARGET_COL = detect_target_and_attach(df_train_raw, df_test_raw, df_train_proc, df_test_proc)
-    print("TARGET_COL:", TARGET_COL)
+    TARGET = detect_target(df_train)
+    FEATURES = filter_numeric_features(df_train, TARGET)
 
-    # choose safe feature set
-    if keep_features:
-        feature_cols = [c for c in keep_features if c in df_train_proc.columns]
-        if not feature_cols:
-            raise ValueError("keep_features specified but none present in processed dataframe.")
-    else:
-        # auto-filter leakage features; allow core sensors if present
-        core_allow = [c for c in ["temperature", "vibration", "pressure", "rpm"] if c in df_train_proc.columns]
-        feature_cols = filter_features(df_train_proc, extra_allow=core_allow)
-    print("Using feature columns (sample):", feature_cols[:10])
+    print("Initial feature count:", len(FEATURES))
 
-    # prepare X,y and safety cleaning
-    y_train = df_train_proc[TARGET_COL].astype("float32")
-    y_test  = df_test_proc[TARGET_COL].astype("float32")
+    # -------- TRAIN / VAL SPLIT --------
+    val_frac = 0.1
+    tv = int(len(df_train) * (1 - val_frac))
+    df_tr = df_train.iloc[:tv]
+    df_val = df_train.iloc[tv:]
 
-    X_train = df_train_proc[feature_cols].replace([float("inf"), float("-inf")], pd.NA).fillna(0)
-    X_test  = df_test_proc[feature_cols].replace([float("inf"), float("-inf")], pd.NA).fillna(0)
+    X_tr = df_tr[FEATURES].replace([np.inf, -np.inf], np.nan).fillna(0)
+    y_tr = df_tr[TARGET].astype("int")
 
-    # scale
+    X_val = df_val[FEATURES].replace([np.inf, -np.inf], np.nan).fillna(0)
+    y_val = df_val[TARGET].astype("int")
+
+    # -------- FEATURE SELECTION --------
+    FEATURES = select_top_k_features(X_tr, y_tr, top_k_features)
+    print("Reduced feature count:", len(FEATURES))
+
+    X_tr = X_tr[FEATURES]
+    X_val = X_val[FEATURES]
+
+    # -------- SCALE --------
     scaler = StandardScaler()
-    X_train_scaled = pd.DataFrame(scaler.fit_transform(X_train), columns=feature_cols)
-    X_test_scaled  = pd.DataFrame(scaler.transform(X_test), columns=feature_cols)
+    X_tr_s = pd.DataFrame(scaler.fit_transform(X_tr), columns=FEATURES)
+    X_val_s = pd.DataFrame(scaler.transform(X_val), columns=FEATURES)
 
-    # sequence datasets
-    train_ds = SequenceDataset(X_train_scaled, y_train, seq_len=seq_len)
-    test_ds  = SequenceDataset(X_test_scaled, y_test, seq_len=seq_len)
-    if len(train_ds) == 0 or len(test_ds) == 0:
-        raise ValueError("Sequence length too large for dataset. Reduce seq_len")
+    # -------- DATASETS --------
+    train_ds = SequenceDataset(X_tr_s, y_tr, seq_len)
+    val_ds = SequenceDataset(X_val_s, y_val, seq_len)
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
-    test_loader  = DataLoader(test_ds, batch_size=batch_size, shuffle=False, drop_last=False)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
-    # model, loss, optimizer
-    input_size = X_train_scaled.shape[1]
-    model = LSTMClassifier(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, dropout=dropout).to(device)
+    # -------- MODEL --------
+    model = LSTMClassifier(
+        input_size=len(FEATURES),
+        hidden_size=hidden_size,
+        dropout=dropout,
+    ).to(device)
 
-    pos = max(1.0, float(y_train.sum()))
-    neg = max(1.0, float((y_train == 0).sum()))
-    pos_weight = torch.tensor([neg / pos], dtype=torch.float32, device=device)
+    pos = max(1.0, y_tr.sum())
+    neg = max(1.0, (y_tr == 0).sum())
+    pos_weight = torch.tensor([neg / pos], device=device)
+
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=3)
 
-    best_val_f1 = -1.0
-    patience_ctr = 0
-    patience_limit = 6  # early stopping on val_f1
+    best_f1 = 0.0
+    patience = 6
+    wait = 0
 
-    models_dir = models_dir or os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "models"))
-    ensure_models_dir(models_dir)
+    ensure_dir("models")
 
-    print("Starting training...")
+    # -------- TRAIN LOOP --------
     for epoch in range(1, epochs + 1):
         model.train()
-        total_loss = 0.0
+        losses = []
+
         for xb, yb in train_loader:
-            xb = xb.to(device)
-            yb = yb.to(device).squeeze(1)
+            xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad()
             logits = model(xb)
             loss = criterion(logits, yb)
             loss.backward()
             optimizer.step()
-            total_loss += float(loss.item()) * xb.size(0)
-        avg_loss = total_loss / (len(train_loader.dataset) if len(train_loader.dataset) > 0 else 1)
+            losses.append(loss.item())
 
-        # evaluate
+        # -------- VALIDATION --------
         model.eval()
-        all_probs, all_lbls = [], []
+        preds, trues = [], []
+
         with torch.no_grad():
-            for xb, yb in test_loader:
+            for xb, yb in val_loader:
                 xb = xb.to(device)
                 logits = model(xb)
-                probs = torch.sigmoid(logits).cpu().numpy()
-                all_probs.append(probs)
-                all_lbls.append(yb.numpy().squeeze(1))
-        y_proba = np.concatenate(all_probs)
-        y_true = np.concatenate(all_lbls)
+                probs = torch.sigmoid(logits)
+                preds.append((probs >= 0.5).cpu().numpy())
+                trues.append(yb.numpy())
 
-        if len(np.unique(y_true)) > 1:
-            y_pred = (y_proba >= 0.5).astype(int)
-            val_f1 = f1_score(y_true, y_pred)
-            try:
-                val_auc = roc_auc_score(y_true, y_proba)
-            except Exception:
-                val_auc = float("nan")
+        y_pred = np.concatenate(preds)
+        y_true = np.concatenate(trues)
+
+        val_acc = accuracy_score(y_true, y_pred)
+        val_f1 = f1_score(y_true, y_pred)
+
+        print(
+            f"Epoch {epoch:02d} | "
+            f"loss {np.mean(losses):.4f} | "
+            f"val_acc {val_acc:.4f} | "
+            f"val_f1 {val_f1:.4f}"
+        )
+
+        if val_f1 > best_f1:
+            best_f1 = val_f1
+            wait = 0
+            torch.save(model.state_dict(), "models/lstm_model.pt")
+            joblib.dump(scaler, "models/scaler.pkl")
+            joblib.dump(FEATURES, "models/features.pkl")
         else:
-            val_f1 = 0.0
-            val_auc = float("nan")
-
-        print(f"Epoch {epoch}/{epochs}  loss:{avg_loss:.6f}  val_f1:{val_f1:.4f}  val_auc:{val_auc:.4f}")
-
-        scheduler.step(val_f1)
-
-        # early stopping & save best
-        if val_f1 > best_val_f1:
-            best_val_f1 = val_f1
-            patience_ctr = 0
-            meta = {"input_size": input_size, "hidden_size": hidden_size, "num_layers": num_layers, "seq_len": seq_len, "dropout": dropout}
-            save_artifacts(models_dir, model, scaler, feature_cols, meta)
-        else:
-            patience_ctr += 1
-            if patience_ctr >= patience_limit:
-                print("Early stopping triggered. Stopping training.")
+            wait += 1
+            if wait >= patience:
+                print("Early stopping triggered.")
                 break
 
-    print("Training finished. Best val_f1:", best_val_f1)
-    return model
+    # -------- FINAL REPORT --------
+    print("\n=== FINAL VALIDATION CLASSIFICATION REPORT ===")
+    print(classification_report(y_true, y_pred, digits=4))
+
+    print("Best validation F1:", best_f1)
 
 
-# ---------------- Prediction helpers ----------------
-def predict_sliding(csv_path: str, seq_len: int = 32, models_dir: str | None = None, device: str | None = None):
-    device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    models_dir = models_dir or os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "models"))
-    model, scaler, feature_cols, saved_seq_len = load_for_predict(models_dir, device)
-    if seq_len != saved_seq_len:
-        print(f"Warning: requested seq_len {seq_len} != saved {saved_seq_len}. Using saved.")
-        seq_len = saved_seq_len
-
-    df = pd.read_csv(csv_path)
-    df_proc = add_features(preprocess_data(df.copy()), include_trend=False)
-
-    missing = [c for c in feature_cols if c not in df_proc.columns]
-    if missing:
-        raise KeyError(f"Missing feature columns in data for prediction: {missing}")
-
-    X = df_proc[feature_cols].replace([float("inf"), float("-inf")], pd.NA).fillna(0)
-    Xs = pd.DataFrame(scaler.transform(X), columns=feature_cols)
-    ds = SequenceDataset(Xs, pd.Series([0] * len(Xs)), seq_len=seq_len)
-    loader = DataLoader(ds, batch_size=256, shuffle=False, drop_last=False)
-
-    probs = []
-    with torch.no_grad():
-        for xb, _ in loader:
-            xb = xb.to(device)
-            logits = model(xb)
-            p = torch.sigmoid(logits).cpu().numpy()
-            probs.extend(p.tolist())
-    probs = np.array(probs)
-    out_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "predictions_lstm.csv")
-    pd.DataFrame({"probability": probs}).to_csv(out_path, index=False)
-    print("Saved sliding-window probabilities to:", out_path)
-    return probs
-
-
-def predict_one_per_machine(csv_path: str, seq_len: int = 32, models_dir: str | None = None, device: str | None = None, id_col: str = "machine_id"):
-    device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    models_dir = models_dir or os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "models"))
-    model, scaler, feature_cols, saved_seq_len = load_for_predict(models_dir, device)
-    seq_len = saved_seq_len
-
-    df = pd.read_csv(csv_path)
-    if id_col not in df.columns:
-        raise KeyError(f"id_col '{id_col}' not found in CSV. Use sliding-window predict instead.")
-
-    rows = []
-    for mid, g in df.groupby(id_col):
-        g = g.sort_values("Timestamp").reset_index(drop=True) if "Timestamp" in g.columns else g.reset_index(drop=True)
-        if len(g) < seq_len:
-            continue
-        last = g.tail(seq_len)
-        last_proc = add_features(preprocess_data(last.copy()), include_trend=False)
-        missing = [c for c in feature_cols if c not in last_proc.columns]
-        if missing:
-            print(f"Skipping {mid}: missing features {missing}")
-            continue
-        X = last_proc[feature_cols].replace([float("inf"), float("-inf")], pd.NA).fillna(0)
-        Xs = pd.DataFrame(scaler.transform(X), columns=feature_cols).values.astype("float32")
-        xb = torch.from_numpy(Xs).unsqueeze(0).to(device)
-        with torch.no_grad():
-            logit = model(xb)
-            prob = torch.sigmoid(logit).item()
-        rows.append({"machine_id": mid, "probability": prob})
-    out = pd.DataFrame(rows)
-    out_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "predictions_per_machine.csv")
-    out.to_csv(out_path, index=False)
-    print("Saved per-machine predictions to:", out_path)
-    return out
-
-
-# ---------------- CLI ----------------
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--csv", required=True)
-    p.add_argument("--seq_len", type=int, default=32)
-    p.add_argument("--epochs", type=int, default=20)
-    p.add_argument("--batch_size", type=int, default=128)
-    p.add_argument("--hidden_size", type=int, default=64)
-    p.add_argument("--num_layers", type=int, default=1)
-    p.add_argument("--dropout", type=float, default=0.2)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--holdout_frac", type=float, default=0.2)
-    p.add_argument("--limit_rows", type=int, default=0)
-    p.add_argument("--predict", action="store_true")
-    p.add_argument("--predict_one_per_machine", action="store_true")
-    p.add_argument("--id_col", type=str, default="machine_id")
-    p.add_argument("--keep_features", type=str, default="", help="Comma-separated feature names to force-include (optional)")
-    return p.parse_args()
-
-
+# ================= CLI =================
 if __name__ == "__main__":
-    args = parse_args()
-    csv_path = os.path.abspath(args.csv)
-    keep_features = [s.strip() for s in args.keep_features.split(",")] if args.keep_features else None
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--csv", required=True)
+    parser.add_argument("--seq_len", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--hidden_size", type=int, default=64)
+    parser.add_argument("--dropout", type=float, default=0.3)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--holdout_frac", type=float, default=0.2)
+    parser.add_argument("--top_k_features", type=int, default=100)
+    args = parser.parse_args()
 
-    if args.predict:
-        print("Running sliding-window prediction...")
-        predict_sliding(csv_path, seq_len=args.seq_len)
-        if args.predict_one_per_machine:
-            try:
-                predict_one_per_machine(csv_path, seq_len=args.seq_len, id_col=args.id_col)
-            except Exception as e:
-                print("predict_one_per_machine failed:", e)
-    else:
-        train_lstm(csv_path,
-                   seq_len=args.seq_len,
-                   epochs=args.epochs,
-                   batch_size=args.batch_size,
-                   hidden_size=args.hidden_size,
-                   num_layers=args.num_layers,
-                   dropout=args.dropout,
-                   lr=args.lr,
-                   holdout_frac=args.holdout_frac,
-                   limit_rows=(args.limit_rows or None),
-                   keep_features=keep_features)
+    train_lstm(
+        csv_path=args.csv,
+        seq_len=args.seq_len,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        hidden_size=args.hidden_size,
+        dropout=args.dropout,
+        lr=args.lr,
+        holdout_frac=args.holdout_frac,
+        top_k_features=args.top_k_features,
+    )
